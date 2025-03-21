@@ -2,14 +2,17 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+//go:build windows
 // +build windows
 
 package win
 
 import (
-	"golang.org/x/sys/windows"
+	"fmt"
 	"syscall"
 	"unsafe"
+
+	"golang.org/x/sys/windows"
 )
 
 // PDH error codes, which can be returned by all Pdh* functions. Taken from mingw-w64 pdhmsg.h
@@ -173,6 +176,8 @@ var (
 	pdh_GetFormattedCounterArrayW *windows.LazyProc
 	pdh_OpenQuery                 *windows.LazyProc
 	pdh_ValidatePathW             *windows.LazyProc
+	pdh_LookupPerfIndexByNameW    *windows.LazyProc
+	pdh_LookupPerfNameByIndexW    *windows.LazyProc
 )
 
 func init() {
@@ -188,6 +193,8 @@ func init() {
 	pdh_GetFormattedCounterArrayW = libpdhDll.NewProc("PdhGetFormattedCounterArrayW")
 	pdh_OpenQuery = libpdhDll.NewProc("PdhOpenQuery")
 	pdh_ValidatePathW = libpdhDll.NewProc("PdhValidatePathW")
+	pdh_LookupPerfIndexByNameW = libpdhDll.NewProc("PdhLookupPerfIndexByNameW")
+	pdh_LookupPerfNameByIndexW = libpdhDll.NewProc("PdhLookupPerfNameByIndexW")
 }
 
 // Adds the specified counter to the query. This is the internationalized version. Preferably, use the
@@ -207,7 +214,7 @@ func init() {
 // full implemention of the pdh.dll API, except with a GUI and all that. The registry setting also provides an
 // interface to the available counters, and can be found at the following key:
 //
-// 	HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Perflib\CurrentLanguage
+//	HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Perflib\CurrentLanguage
 //
 // This registry key contains several values as follows:
 //
@@ -269,9 +276,9 @@ func PdhCloseQuery(hQuery PDH_HQUERY) uint32 {
 // of the counter can be extracted with PdhGetFormattedCounterValue(). For example, the following code
 // requires at least two calls:
 //
-// 	var handle win.PDH_HQUERY
-// 	var counterHandle win.PDH_HCOUNTER
-// 	ret := win.PdhOpenQuery(0, 0, &handle)
+//	var handle win.PDH_HQUERY
+//	var counterHandle win.PDH_HCOUNTER
+//	ret := win.PdhOpenQuery(0, 0, &handle)
 //	ret = win.PdhAddEnglishCounter(handle, "\\Processor(_Total)\\% Idle Time", 0, &counterHandle)
 //	var derp win.PDH_FMT_COUNTERVALUE_DOUBLE
 //
@@ -434,4 +441,35 @@ func PdhValidatePath(path string) uint32 {
 	ret, _, _ := pdh_ValidatePathW.Call(uintptr(unsafe.Pointer(ptxt)))
 
 	return uint32(ret)
+}
+
+func PdhLookupPerfIndexByName(mashineName, counterName string) uint32 {
+	var ret uint32
+	// mshineNamePtr, _ := syscall.UTF16PtrFromString(mashineName)
+	counterNamePtr, _ := syscall.UTF16PtrFromString(counterName)
+	res, _, _ := pdh_LookupPerfIndexByNameW.Call(0, uintptr(unsafe.Pointer(counterNamePtr)), uintptr(unsafe.Pointer(&ret)))
+	fmt.Printf("res: %v\n", res)
+	retz := PdhValidatePath(counterName)
+	fmt.Printf("retz: %v\n", retz)
+
+	return uint32(ret)
+}
+
+func PdhLookupPerfNameByIndex(id uint32) uint32 {
+	var initBuff [1]uint16
+	bufPtr := unsafe.Pointer(&initBuff[0])
+	zz := uint32(0)
+	res, _, _ := pdh_LookupPerfNameByIndexW.Call(0, uintptr(id), uintptr(bufPtr), uintptr(unsafe.Pointer(&zz)))
+
+	if res != PDH_MORE_DATA {
+		return uint32(res)
+	}
+
+	buff := make([]uint16, zz)
+	bufPtr = unsafe.Pointer(&buff[0])
+	res, _, _ = pdh_LookupPerfNameByIndexW.Call(0, uintptr(id), uintptr(bufPtr), uintptr(unsafe.Pointer(&zz)))
+
+	fmt.Printf("buf: %s\n", syscall.UTF16ToString(buff))
+
+	return uint32(res)
 }
