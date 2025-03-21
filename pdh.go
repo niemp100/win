@@ -178,6 +178,7 @@ var (
 	pdh_ValidatePathW             *windows.LazyProc
 	pdh_LookupPerfIndexByNameW    *windows.LazyProc
 	pdh_LookupPerfNameByIndexW    *windows.LazyProc
+	pdh_ExpandWildCardPath        *windows.LazyProc
 )
 
 func init() {
@@ -195,6 +196,7 @@ func init() {
 	pdh_ValidatePathW = libpdhDll.NewProc("PdhValidatePathW")
 	pdh_LookupPerfIndexByNameW = libpdhDll.NewProc("PdhLookupPerfIndexByNameW")
 	pdh_LookupPerfNameByIndexW = libpdhDll.NewProc("PdhLookupPerfNameByIndexW")
+	pdh_ExpandWildCardPath = libpdhDll.NewProc("PdhExpandWildCardPathW")
 }
 
 // Adds the specified counter to the query. This is the internationalized version. Preferably, use the
@@ -468,6 +470,38 @@ func PdhLookupPerfNameByIndex(id uint32) uint32 {
 	buff := make([]uint16, zz)
 	bufPtr = unsafe.Pointer(&buff[0])
 	res, _, _ = pdh_LookupPerfNameByIndexW.Call(0, uintptr(id), uintptr(bufPtr), uintptr(unsafe.Pointer(&zz)))
+
+	fmt.Printf("buf: %s\n", syscall.UTF16ToString(buff))
+
+	return uint32(res)
+}
+
+func PdhExpandWildCardPath(szDataSource, szWildCardPath string, dwFlags uintptr) uint32 {
+	var initBuff [1]uint16
+	bufPtr := unsafe.Pointer(&initBuff[0])
+	dSPTR, _ := syscall.UTF16PtrFromString(szDataSource)
+	pathPtr, _ := syscall.UTF16PtrFromString(szWildCardPath)
+	zz := uint32(0)
+	res, _, _ := pdh_ExpandWildCardPath.Call(
+		uintptr(unsafe.Pointer(dSPTR)),
+		uintptr(unsafe.Pointer(pathPtr)),
+		uintptr(bufPtr),
+		uintptr(zz),
+		dwFlags,
+	)
+	if res != PDH_MORE_DATA {
+		fmt.Printf("Something went wrong %d\n", res)
+		return uint32(res)
+	}
+	buff := make([]uint16, zz)
+	bufPtr = unsafe.Pointer(&buff[0])
+	res, _, _ = pdh_ExpandWildCardPath.Call(
+		uintptr(unsafe.Pointer(dSPTR)),
+		uintptr(unsafe.Pointer(pathPtr)),
+		uintptr(bufPtr),
+		uintptr(zz),
+		dwFlags,
+	)
 
 	fmt.Printf("buf: %s\n", syscall.UTF16ToString(buff))
 
