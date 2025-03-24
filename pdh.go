@@ -178,7 +178,7 @@ var (
 	pdh_ValidatePathW             *windows.LazyProc
 	pdh_LookupPerfIndexByNameW    *windows.LazyProc
 	pdh_LookupPerfNameByIndexW    *windows.LazyProc
-	pdh_ExpandWildCardPath        *windows.LazyProc
+	pdh_PdhExpandCounterPathW     *windows.LazyProc
 )
 
 func init() {
@@ -196,7 +196,7 @@ func init() {
 	pdh_ValidatePathW = libpdhDll.NewProc("PdhValidatePathW")
 	pdh_LookupPerfIndexByNameW = libpdhDll.NewProc("PdhLookupPerfIndexByNameW")
 	pdh_LookupPerfNameByIndexW = libpdhDll.NewProc("PdhLookupPerfNameByIndexW")
-	pdh_ExpandWildCardPath = libpdhDll.NewProc("PdhExpandWildCardPathW")
+	pdh_PdhExpandCounterPathW = libpdhDll.NewProc("PdhExpandCounterPathW")
 }
 
 // Adds the specified counter to the query. This is the internationalized version. Preferably, use the
@@ -476,34 +476,58 @@ func PdhLookupPerfNameByIndex(id uint32) uint32 {
 	return uint32(res)
 }
 
-func PdhExpandWildCardPath(szDataSource, szWildCardPath string, dwFlags uintptr) uint32 {
+/*
+Wraps the Call To the PdhExpandCounterPathW-Function (pdh.h) and handles the Memory Allocation
+szDataSource leave empty for local mashine
+szWildCardPath full Counter Path with Wildcards
+dwFlags
+returns status of pdh call and a string slice containing all the possible counter paths
+*/
+func PdhExpandWildCardPath(szDataSource, szWildCardPath string, dwFlags uintptr) (uint32, []string) {
 	var initBuff [1]uint16
-	bufPtr := unsafe.Pointer(&initBuff[0])
-	dSPTR, _ := syscall.UTF16PtrFromString(szDataSource)
 	pathPtr, _ := syscall.UTF16PtrFromString(szWildCardPath)
 	zz := uint32(0)
-	res, _, _ := pdh_ExpandWildCardPath.Call(
-		uintptr(unsafe.Pointer(dSPTR)),
+	res, _, _ := pdh_PdhExpandCounterPathW.Call(
 		uintptr(unsafe.Pointer(pathPtr)),
-		uintptr(bufPtr),
-		uintptr(zz),
-		dwFlags,
+		uintptr(unsafe.Pointer(&initBuff[0])),
+		uintptr(unsafe.Pointer(&zz)),
 	)
 	if res != PDH_MORE_DATA {
-		fmt.Printf("Something went wrong %d\n", res)
-		return uint32(res)
+		return uint32(res), nil
 	}
 	buff := make([]uint16, zz)
-	bufPtr = unsafe.Pointer(&buff[0])
-	res, _, _ = pdh_ExpandWildCardPath.Call(
-		uintptr(unsafe.Pointer(dSPTR)),
+	res, _, _ = pdh_PdhExpandCounterPathW.Call(
 		uintptr(unsafe.Pointer(pathPtr)),
-		uintptr(bufPtr),
-		uintptr(zz),
-		dwFlags,
+		uintptr(unsafe.Pointer(&buff[0])),
+		uintptr(unsafe.Pointer(&zz)),
 	)
+	val := mszExpandedPathListToStringArr(&buff[0])
+	return uint32(res), val
+}
 
-	fmt.Printf("buf: %s\n", syscall.UTF16ToString(buff))
+func Utf16PtrToString(ptr *uint16) (string, int) {
+	if ptr == nil {
+		return "", 0
+	}
+	end := unsafe.Pointer(ptr)
+	n := 0
+	for *(*uint16)(end) != 0 {
+		end = unsafe.Pointer(uintptr(end) + unsafe.Sizeof(*ptr))
+		n++
+	}
+	return syscall.UTF16ToString(unsafe.Slice(ptr, n)), n
+}
 
-	return uint32(res)
+func mszExpandedPathListToStringArr(ptr *uint16) []string {
+	if ptr == nil {
+		return []string{}
+	}
+	var result []string
+	end := unsafe.Pointer(ptr)
+	for *(*uint16)(end) != 0 {
+		curr, n := Utf16PtrToString((*uint16)(end))
+		result = append(result, curr)
+		end = unsafe.Pointer(uintptr(n+1)*uintptr(unsafe.Sizeof(*ptr)) + uintptr(end))
+	}
+	return result
 }
