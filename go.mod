@@ -1,5 +1,5 @@
-module github.com/lxn/win
+module github.com/niemp100/win
 
-go 1.12
+go 1.24.0
 
-require golang.org/x/sys v0.0.0-20201018230417-eeed37f84f13
+require golang.org/x/sys v0.31.0
