@@ -2,14 +2,16 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+//go:build windows
 // +build windows
 
 package win
 
 import (
-	"golang.org/x/sys/windows"
 	"syscall"
 	"unsafe"
+
+	"golang.org/x/sys/windows"
 )
 
 // PDH error codes, which can be returned by all Pdh* functions. Taken from mingw-w64 pdhmsg.h
@@ -173,6 +175,9 @@ var (
 	pdh_GetFormattedCounterArrayW *windows.LazyProc
 	pdh_OpenQuery                 *windows.LazyProc
 	pdh_ValidatePathW             *windows.LazyProc
+	pdh_LookupPerfIndexByNameW    *windows.LazyProc
+	pdh_LookupPerfNameByIndexW    *windows.LazyProc
+	pdh_PdhExpandCounterPathW     *windows.LazyProc
 )
 
 func init() {
@@ -188,6 +193,9 @@ func init() {
 	pdh_GetFormattedCounterArrayW = libpdhDll.NewProc("PdhGetFormattedCounterArrayW")
 	pdh_OpenQuery = libpdhDll.NewProc("PdhOpenQuery")
 	pdh_ValidatePathW = libpdhDll.NewProc("PdhValidatePathW")
+	pdh_LookupPerfIndexByNameW = libpdhDll.NewProc("PdhLookupPerfIndexByNameW")
+	pdh_LookupPerfNameByIndexW = libpdhDll.NewProc("PdhLookupPerfNameByIndexW")
+	pdh_PdhExpandCounterPathW = libpdhDll.NewProc("PdhExpandCounterPathW")
 }
 
 // Adds the specified counter to the query. This is the internationalized version. Preferably, use the
@@ -207,7 +215,7 @@ func init() {
 // full implemention of the pdh.dll API, except with a GUI and all that. The registry setting also provides an
 // interface to the available counters, and can be found at the following key:
 //
-// 	HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Perflib\CurrentLanguage
+//	HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Perflib\CurrentLanguage
 //
 // This registry key contains several values as follows:
 //
@@ -269,9 +277,9 @@ func PdhCloseQuery(hQuery PDH_HQUERY) uint32 {
 // of the counter can be extracted with PdhGetFormattedCounterValue(). For example, the following code
 // requires at least two calls:
 //
-// 	var handle win.PDH_HQUERY
-// 	var counterHandle win.PDH_HCOUNTER
-// 	ret := win.PdhOpenQuery(0, 0, &handle)
+//	var handle win.PDH_HQUERY
+//	var counterHandle win.PDH_HCOUNTER
+//	ret := win.PdhOpenQuery(0, 0, &handle)
 //	ret = win.PdhAddEnglishCounter(handle, "\\Processor(_Total)\\% Idle Time", 0, &counterHandle)
 //	var derp win.PDH_FMT_COUNTERVALUE_DOUBLE
 //
@@ -434,4 +442,86 @@ func PdhValidatePath(path string) uint32 {
 	ret, _, _ := pdh_ValidatePathW.Call(uintptr(unsafe.Pointer(ptxt)))
 
 	return uint32(ret)
+}
+
+// Find the corresponding performance Index By Counterpath
+// returns ERROR_SUCCESS if call was success second return value is the index
+func PdhLookupPerfIndexByName(mashineName, szFullCounterPath string) (response_code uint32, index uint32) {
+	counterNamePtr, _ := syscall.UTF16PtrFromString(szFullCounterPath)
+	res, _, _ := pdh_LookupPerfIndexByNameW.Call(0, uintptr(unsafe.Pointer(counterNamePtr)), uintptr(unsafe.Pointer(&index)))
+
+	return uint32(res), index
+}
+
+func PdhLookupPerfNameByIndex(id uint32) (response_code uint32, name string) {
+	var initBuff [1]uint16
+	bufPtr := unsafe.Pointer(&initBuff[0])
+	zz := uint32(0)
+	res, _, _ := pdh_LookupPerfNameByIndexW.Call(0, uintptr(id), uintptr(bufPtr), uintptr(unsafe.Pointer(&zz)))
+
+	if res != PDH_MORE_DATA {
+		return uint32(res), ""
+	}
+
+	buff := make([]uint16, zz)
+	bufPtr = unsafe.Pointer(&buff[0])
+	res, _, _ = pdh_LookupPerfNameByIndexW.Call(0, uintptr(id), uintptr(bufPtr), uintptr(unsafe.Pointer(&zz)))
+
+	return uint32(res), syscall.UTF16ToString(buff)
+}
+
+/*
+Wraps the Call To the PdhExpandCounterPathW-Function (pdh.h) and handles the Memory Allocation
+szDataSource leave empty for local mashine
+szWildCardPath full Counter Path with Wildcards
+dwFlags
+returns status of pdh call and a string slice containing all the possible counter paths
+*/
+func PdhExpandCounterPath(szDataSource, szWildCardPath string, dwFlags uintptr) (uint32, []string) {
+	var initBuff [1]uint16
+	pathPtr, _ := syscall.UTF16PtrFromString(szWildCardPath)
+	zz := uint32(0)
+	res, _, _ := pdh_PdhExpandCounterPathW.Call(
+		uintptr(unsafe.Pointer(pathPtr)),
+		uintptr(unsafe.Pointer(&initBuff[0])),
+		uintptr(unsafe.Pointer(&zz)),
+	)
+	if res != PDH_MORE_DATA {
+		return uint32(res), nil
+	}
+	buff := make([]uint16, zz)
+	res, _, _ = pdh_PdhExpandCounterPathW.Call(
+		uintptr(unsafe.Pointer(pathPtr)),
+		uintptr(unsafe.Pointer(&buff[0])),
+		uintptr(unsafe.Pointer(&zz)),
+	)
+	val := mszExpandedPathListToStringArr(&buff[0])
+	return uint32(res), val
+}
+
+func utf16PtrToString(ptr *uint16) (string, int) {
+	if ptr == nil {
+		return "", 0
+	}
+	end := unsafe.Pointer(ptr)
+	n := 0
+	for *(*uint16)(end) != 0 {
+		end = unsafe.Pointer(uintptr(end) + unsafe.Sizeof(*ptr))
+		n++
+	}
+	return syscall.UTF16ToString(unsafe.Slice(ptr, n)), n
+}
+
+func mszExpandedPathListToStringArr(ptr *uint16) []string {
+	if ptr == nil {
+		return []string{}
+	}
+	var result []string
+	end := unsafe.Pointer(ptr)
+	for *(*uint16)(end) != 0 {
+		curr, n := utf16PtrToString((*uint16)(end))
+		result = append(result, curr)
+		end = unsafe.Pointer(uintptr(n+1)*uintptr(unsafe.Sizeof(*ptr)) + uintptr(end)) //
+	}
+	return result
 }
