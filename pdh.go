@@ -8,7 +8,6 @@
 package win
 
 import (
-	"fmt"
 	"syscall"
 	"unsafe"
 
@@ -445,35 +444,30 @@ func PdhValidatePath(path string) uint32 {
 	return uint32(ret)
 }
 
-func PdhLookupPerfIndexByName(mashineName, counterName string) uint32 {
-	var ret uint32
-	// mshineNamePtr, _ := syscall.UTF16PtrFromString(mashineName)
-	counterNamePtr, _ := syscall.UTF16PtrFromString(counterName)
-	res, _, _ := pdh_LookupPerfIndexByNameW.Call(0, uintptr(unsafe.Pointer(counterNamePtr)), uintptr(unsafe.Pointer(&ret)))
-	fmt.Printf("res: %v\n", res)
-	retz := PdhValidatePath(counterName)
-	fmt.Printf("retz: %v\n", retz)
+// Find the corresponding performance Index By Counterpath
+// returns ERROR_SUCCESS if call was success second return value is the index
+func PdhLookupPerfIndexByName(mashineName, szFullCounterPath string) (response_code uint32, index uint32) {
+	counterNamePtr, _ := syscall.UTF16PtrFromString(szFullCounterPath)
+	res, _, _ := pdh_LookupPerfIndexByNameW.Call(0, uintptr(unsafe.Pointer(counterNamePtr)), uintptr(unsafe.Pointer(&index)))
 
-	return uint32(ret)
+	return uint32(res), index
 }
 
-func PdhLookupPerfNameByIndex(id uint32) uint32 {
+func PdhLookupPerfNameByIndex(id uint32) (response_code uint32, name string) {
 	var initBuff [1]uint16
 	bufPtr := unsafe.Pointer(&initBuff[0])
 	zz := uint32(0)
 	res, _, _ := pdh_LookupPerfNameByIndexW.Call(0, uintptr(id), uintptr(bufPtr), uintptr(unsafe.Pointer(&zz)))
 
 	if res != PDH_MORE_DATA {
-		return uint32(res)
+		return uint32(res), ""
 	}
 
 	buff := make([]uint16, zz)
 	bufPtr = unsafe.Pointer(&buff[0])
 	res, _, _ = pdh_LookupPerfNameByIndexW.Call(0, uintptr(id), uintptr(bufPtr), uintptr(unsafe.Pointer(&zz)))
 
-	fmt.Printf("buf: %s\n", syscall.UTF16ToString(buff))
-
-	return uint32(res)
+	return uint32(res), syscall.UTF16ToString(buff)
 }
 
 /*
@@ -483,7 +477,7 @@ szWildCardPath full Counter Path with Wildcards
 dwFlags
 returns status of pdh call and a string slice containing all the possible counter paths
 */
-func PdhExpandWildCardPath(szDataSource, szWildCardPath string, dwFlags uintptr) (uint32, []string) {
+func PdhExpandCounterPath(szDataSource, szWildCardPath string, dwFlags uintptr) (uint32, []string) {
 	var initBuff [1]uint16
 	pathPtr, _ := syscall.UTF16PtrFromString(szWildCardPath)
 	zz := uint32(0)
@@ -505,7 +499,7 @@ func PdhExpandWildCardPath(szDataSource, szWildCardPath string, dwFlags uintptr)
 	return uint32(res), val
 }
 
-func Utf16PtrToString(ptr *uint16) (string, int) {
+func utf16PtrToString(ptr *uint16) (string, int) {
 	if ptr == nil {
 		return "", 0
 	}
@@ -525,9 +519,9 @@ func mszExpandedPathListToStringArr(ptr *uint16) []string {
 	var result []string
 	end := unsafe.Pointer(ptr)
 	for *(*uint16)(end) != 0 {
-		curr, n := Utf16PtrToString((*uint16)(end))
+		curr, n := utf16PtrToString((*uint16)(end))
 		result = append(result, curr)
-		end = unsafe.Pointer(uintptr(n+1)*uintptr(unsafe.Sizeof(*ptr)) + uintptr(end))
+		end = unsafe.Pointer(uintptr(n+1)*uintptr(unsafe.Sizeof(*ptr)) + uintptr(end)) //
 	}
 	return result
 }
