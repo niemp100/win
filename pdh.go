@@ -8,6 +8,7 @@
 package win
 
 import (
+	"fmt"
 	"syscall"
 	"unsafe"
 
@@ -162,6 +163,52 @@ type PDH_FMT_COUNTERVALUE_ITEM_LONG struct {
 	FmtValue PDH_FMT_COUNTERVALUE_LONG
 }
 
+type PDH_DATA_ITEM_PATH_ELEMENTS_A struct {
+	szMachineName  uint16
+	ObjectGUID     [16]byte
+	dwItemId       uint32
+	szInstanceName uint16
+}
+
+type PPDH_DATA_ITEM_PATH_ELEMENTS_A = *PDH_DATA_ITEM_PATH_ELEMENTS_A
+
+type PDH_COUNTER_PATH_ELEMENTS_A struct {
+	szMachineName    *uint16 // pointer to a string
+	szObjectName     *uint16 // pointer to a string
+	szInstanceName   *uint16 // pointer to a string
+	szParentInstance *uint16 // pointer to a string
+	dwInstanceIndex  uint32
+	szCounterName    *uint16 // pointer to a string
+}
+
+type PPDH_COUNTER_PATH_ELEMENTS_A = *PDH_COUNTER_PATH_ELEMENTS_A
+
+type PDHCounterInfoA struct {
+	dwLength        uint32
+	dwType          uint32
+	CVersion        uint32
+	CStatus         uint32
+	lScale          int32
+	lDefaultScale   int32
+	dwUserData      uintptr
+	dwQueryUserData uintptr
+	szFullPath      *uint16 // pointer to a string
+	DataItemPath    PDH_DATA_ITEM_PATH_ELEMENTS_A
+	CounterPath     PDH_COUNTER_PATH_ELEMENTS_A
+	PathElements    struct {
+		szMachineName    *uint16 // pointer to a string
+		szObjectName     *uint16 // pointer to a string
+		szInstanceName   *uint16 // pointer to a string
+		szParentInstance *uint16 // pointer to a string
+		dwInstanceIndex  uint32
+		szCounterName    *uint16 // pointer to a string
+	}
+	szExplainText *uint16 // pointer to a string
+	DataBuffer    [1]uint32
+}
+
+type PPDHCounterInfoA = *PDHCounterInfoA
+
 var (
 	// Library
 	libpdhDll *windows.LazyDLL
@@ -178,6 +225,7 @@ var (
 	pdh_LookupPerfIndexByNameW    *windows.LazyProc
 	pdh_LookupPerfNameByIndexW    *windows.LazyProc
 	pdh_PdhExpandCounterPathW     *windows.LazyProc
+	pdh_PdhGetCounterInfoW        *windows.LazyProc
 )
 
 func init() {
@@ -196,6 +244,7 @@ func init() {
 	pdh_LookupPerfIndexByNameW = libpdhDll.NewProc("PdhLookupPerfIndexByNameW")
 	pdh_LookupPerfNameByIndexW = libpdhDll.NewProc("PdhLookupPerfNameByIndexW")
 	pdh_PdhExpandCounterPathW = libpdhDll.NewProc("PdhExpandCounterPathW")
+	pdh_PdhGetCounterInfoW = libpdhDll.NewProc("PdhGetCounterInfoW")
 }
 
 // Adds the specified counter to the query. This is the internationalized version. Preferably, use the
@@ -497,6 +546,45 @@ func PdhExpandCounterPath(szDataSource, szWildCardPath string, dwFlags uintptr) 
 	)
 	val := mszExpandedPathListToStringArr(&buff[0])
 	return uint32(res), val
+}
+
+/*
+PDH_FUNCTION PdhGetCounterInfoW(
+
+	[in]      PDH_HCOUNTER        hCounter,
+	[in]      BOOLEAN             bRetrieveExplainText,
+	[in, out] LPDWORD             pdwBufferSize,
+	[out]     PPDH_COUNTER_INFO_A lpBuffer
+
+);
+*/
+func PdhGetCounterInfo(hConuter PDH_HCOUNTER, retrieveExplainText bool, size uint32) {
+	buffer := make([]PDHCounterInfoA, 1)
+	zz := uint32(0)
+	tr := uint8(0)
+	if res, _, _ := pdh_PdhGetCounterInfoW.Call(
+		uintptr(hConuter),
+		uintptr(unsafe.Pointer(&tr)),
+		uintptr(unsafe.Pointer(&zz)),
+		uintptr(unsafe.Pointer(&buffer[0])),
+	); res != PDH_MORE_DATA {
+		fmt.Printf("res: %v\n", res)
+
+	}
+	buffer = make([]PDHCounterInfoA, uintptr(zz)/unsafe.Sizeof(buffer[0]))
+	fmt.Printf("\"make\": %v\n", "make")
+	res, _, _ := pdh_PdhGetCounterInfoW.Call(
+		uintptr(hConuter),
+		uintptr(unsafe.Pointer(&tr)),
+		uintptr(unsafe.Pointer(&zz)),
+		uintptr(unsafe.Pointer(&buffer[0])),
+	)
+	fmt.Printf("res: %v\n", res)
+	fmt.Printf("buffer: %v\n", buffer)
+	for _, v := range buffer {
+		val, _ := utf16PtrToString(v.szFullPath)
+		fmt.Printf("UTF16PtrToString(v.szFullPath): %v\n", val)
+	}
 }
 
 func utf16PtrToString(ptr *uint16) (string, int) {
